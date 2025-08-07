@@ -581,33 +581,29 @@ impl Instruction {
 }
 
 fn main() {
-    for value in 0x00..=0xFF {
-        let opcode = (value as u32) << 26;
-        let instr = Instruction::decode(opcode);
-        if instr.opcode_type == InstructionType::Invalid {
-            continue; // Skip invalid instructions
-        }
+    // for value in 0x00..=0xFF {
+    //     let opcode = (value as u32) << 26;
+    //     let instr = Instruction::decode(opcode);
+    //     if instr.opcode_type == InstructionType::Invalid {
+    //         continue; // Skip invalid instructions
+    //     }
 
-        println!("{opcode:08X} = {}", instr);
-    }
+    //     println!("{opcode:08X} = {}", instr);
+    // }
 
     // println!("\n\n");
 
-    // let bios_buffer = include_bytes!("../SCPH1000.BIN");
-    // for (i, chunk) in bios_buffer.chunks(4).enumerate() {
-    //     if chunk.len() < 4 {
-    //         continue;
-    //     }
+    let bios_buffer = include_bytes!("../SCPH1000_1GB.BIN");
 
-    //     if i > 10 * 4 {
-    //         break;
-    //     }
+    for (_, chunk) in bios_buffer.chunks(4).enumerate() {
+        if chunk.len() < 4 {
+            continue;
+        }
 
-    //     let opcode = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-    //     let instr = Instruction::decode(opcode);
-    //     println!("{:08X}: {opcode:08X} > {}", i * 4, instr);
-    //     //dbg!(&instr);
-    // }
+        let opcode = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let instr = Instruction::decode(opcode);
+        std::hint::black_box(instr);
+    }
 }
 
 impl std::fmt::Debug for Instruction {
