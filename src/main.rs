@@ -595,11 +595,7 @@ fn main() {
 
     let bios_buffer = include_bytes!("../SCPH1000_1GB.BIN");
 
-    for (_, chunk) in bios_buffer.chunks(4).enumerate() {
-        if chunk.len() < 4 {
-            continue;
-        }
-
+    for chunk in bios_buffer.chunks_exact(4) {
         let opcode = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let instr = Instruction::decode(opcode);
         std::hint::black_box(instr);
