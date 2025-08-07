@@ -287,6 +287,51 @@ pub struct Instruction {
     pub opcode_type: InstructionType,
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Register(u8);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Operand {
+    Register(Register),
+    Immediate(u32),
+    Address(u32),
+    MemoryAddress { offset: i16, base: Register },
+}
+
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self.0 {
+            0 => "$zero",
+            1 => "$at",
+            2 => "$v0",
+            3 => "$v1",
+            4..=7 => return write!(f, "$a{}", self.0 - 4),
+            8..=15 => return write!(f, "$t{}", self.0 - 8),
+            16..=23 => return write!(f, "$s{}", self.0 - 16),
+            24..=25 => return write!(f, "$t{}", self.0 - 16),
+            26..=27 => return write!(f, "$k{}", self.0 - 26),
+            28 => "$gp",
+            29 => "$sp",
+            30 => "$fp",
+            31 => "$ra",
+            _ => return write!(f, "$invalid"),
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl std::fmt::Display for Operand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operand::Register(reg) => write!(f, "{}", reg),
+            Operand::Immediate(imm) => write!(f, "0x{:X}", imm),
+            Operand::Address(addr) => write!(f, "0x{:08X}", addr),
+            Operand::MemoryAddress { offset, base } => write!(f, "0x{:X}({})", offset, base),
+        }
+    }
+}
+
 impl Instruction {
     #[inline(always)]
     pub fn decode(opcode: u32) -> Self {
@@ -373,30 +418,164 @@ impl Instruction {
         self.opcode_raw & 0x03FFFFFF
     }
 
-    pub fn operand1(&self) -> u32 {
+    #[inline(always)]
+    pub fn jump_target(&self, pc: u32) -> u32 {
+        let addr_field = self.address();
+        let pc_plus_4 = pc + 4;
+        (pc_plus_4 & 0xF0000000) | (addr_field << 2)
+    }
+
+    pub fn operand1(&self) -> Option<Operand> {
         match self.opcode_type {
-            InstructionType::RType => (self.rs() as u32) << 21,
-            InstructionType::IType => (self.rs() as u32) << 21,
-            InstructionType::JType => 0,
-            _ => 0,
+            InstructionType::RType => match self.opcode {
+                Opcode::ShiftLeftLogical
+                | Opcode::ShiftRightLogical
+                | Opcode::ShiftRightArithmetic => Some(Operand::Register(Register(self.rt()))),
+                Opcode::JumpRegister | Opcode::JumpAndLinkRegister => {
+                    Some(Operand::Register(Register(self.rs())))
+                }
+                Opcode::MoveFromHi | Opcode::MoveFromLo => {
+                    Some(Operand::Register(Register(self.rd())))
+                }
+                Opcode::MoveToHi | Opcode::MoveToLo => Some(Operand::Register(Register(self.rs()))),
+                Opcode::Multiply
+                | Opcode::MultiplyUnsigned
+                | Opcode::Divide
+                | Opcode::DivideUnsigned => Some(Operand::Register(Register(self.rs()))),
+                Opcode::SystemCall | Opcode::Break => None,
+                _ => Some(Operand::Register(Register(self.rd()))),
+            },
+            InstructionType::IType => match self.opcode {
+                Opcode::LoadUpperImmediate => Some(Operand::Register(Register(self.rt()))),
+                Opcode::BranchGreaterThanZero
+                | Opcode::BranchLessEqualZero
+                | Opcode::BranchGreaterEqualZero
+                | Opcode::BranchLessThanZero
+                | Opcode::BranchLessThanZeroAndLink
+                | Opcode::BranchGreaterEqualZeroAndLink => {
+                    Some(Operand::Register(Register(self.rs())))
+                }
+                _ => Some(Operand::Register(Register(self.rt()))),
+            },
+            InstructionType::JType => Some(Operand::Address(self.address() << 2)),
+            _ => None,
         }
     }
 
-    pub fn operand2(&self) -> u32 {
+    pub fn operand2(&self) -> Option<Operand> {
         match self.opcode_type {
-            InstructionType::RType => (self.rt() as u32) << 16,
-            InstructionType::IType => self.immediate() as u32,
-            InstructionType::JType => 0,
-            _ => 0,
+            InstructionType::RType => match self.opcode {
+                Opcode::ShiftLeftLogical
+                | Opcode::ShiftRightLogical
+                | Opcode::ShiftRightArithmetic => Some(Operand::Immediate(self.shamt() as u32)),
+                Opcode::ShiftLeftLogicalVariable
+                | Opcode::ShiftRightLogicalVariable
+                | Opcode::ShiftRightArithmeticVariable => {
+                    Some(Operand::Register(Register(self.rs())))
+                }
+                Opcode::JumpRegister
+                | Opcode::MoveFromHi
+                | Opcode::MoveFromLo
+                | Opcode::SystemCall
+                | Opcode::Break => None,
+                Opcode::JumpAndLinkRegister => Some(Operand::Register(Register(self.rd()))),
+                Opcode::MoveToHi | Opcode::MoveToLo => None,
+                Opcode::Multiply
+                | Opcode::MultiplyUnsigned
+                | Opcode::Divide
+                | Opcode::DivideUnsigned => Some(Operand::Register(Register(self.rt()))),
+                _ => Some(Operand::Register(Register(self.rs()))),
+            },
+            InstructionType::IType => match self.opcode {
+                Opcode::LoadUpperImmediate => Some(Operand::Immediate(self.immediate() as u32)),
+                Opcode::BranchGreaterThanZero
+                | Opcode::BranchLessEqualZero
+                | Opcode::BranchGreaterEqualZero
+                | Opcode::BranchLessThanZero
+                | Opcode::BranchLessThanZeroAndLink
+                | Opcode::BranchGreaterEqualZeroAndLink => {
+                    Some(Operand::Immediate((self.immediate() as i16) as u32))
+                }
+                Opcode::BranchEqual | Opcode::BranchNotEqual => {
+                    Some(Operand::Register(Register(self.rt())))
+                }
+                Opcode::LoadByte
+                | Opcode::LoadByteUnsigned
+                | Opcode::LoadHalfword
+                | Opcode::LoadHalfwordUnsigned
+                | Opcode::LoadWord
+                | Opcode::LoadWordLeft
+                | Opcode::LoadWordRight => Some(Operand::MemoryAddress {
+                    offset: self.immediate() as i16,
+                    base: Register(self.rs()),
+                }),
+                Opcode::StoreByte
+                | Opcode::StoreHalfword
+                | Opcode::StoreWord
+                | Opcode::StoreWordLeft
+                | Opcode::StoreWordRight => Some(Operand::MemoryAddress {
+                    offset: self.immediate() as i16,
+                    base: Register(self.rs()),
+                }),
+                _ => Some(Operand::Register(Register(self.rs()))),
+            },
+            InstructionType::JType => None,
+            _ => None,
         }
     }
 
-    pub fn operand3(&self) -> u32 {
+    pub fn operand3(&self) -> Option<Operand> {
         match self.opcode_type {
-            InstructionType::RType => (self.rd() as u32) << 11,
-            InstructionType::IType => 0,
-            InstructionType::JType => 0,
-            _ => 0,
+            InstructionType::RType => match self.opcode {
+                Opcode::ShiftLeftLogical
+                | Opcode::ShiftRightLogical
+                | Opcode::ShiftRightArithmetic
+                | Opcode::ShiftLeftLogicalVariable
+                | Opcode::ShiftRightLogicalVariable
+                | Opcode::ShiftRightArithmeticVariable => {
+                    Some(Operand::Register(Register(self.rd())))
+                }
+                Opcode::JumpRegister => None,
+                Opcode::JumpAndLinkRegister => None,
+                Opcode::MoveFromHi
+                | Opcode::MoveFromLo
+                | Opcode::MoveToHi
+                | Opcode::MoveToLo
+                | Opcode::SystemCall
+                | Opcode::Break
+                | Opcode::Multiply
+                | Opcode::MultiplyUnsigned
+                | Opcode::Divide
+                | Opcode::DivideUnsigned => None,
+                _ => Some(Operand::Register(Register(self.rt()))),
+            },
+            InstructionType::IType => match self.opcode {
+                Opcode::LoadUpperImmediate
+                | Opcode::BranchGreaterThanZero
+                | Opcode::BranchLessEqualZero
+                | Opcode::BranchGreaterEqualZero
+                | Opcode::BranchLessThanZero
+                | Opcode::BranchLessThanZeroAndLink
+                | Opcode::BranchGreaterEqualZeroAndLink => None,
+                Opcode::BranchEqual | Opcode::BranchNotEqual => {
+                    Some(Operand::Immediate((self.immediate() as i16) as u32))
+                }
+                Opcode::LoadByte
+                | Opcode::LoadByteUnsigned
+                | Opcode::LoadHalfword
+                | Opcode::LoadHalfwordUnsigned
+                | Opcode::LoadWord
+                | Opcode::LoadWordLeft
+                | Opcode::LoadWordRight
+                | Opcode::StoreByte
+                | Opcode::StoreHalfword
+                | Opcode::StoreWord
+                | Opcode::StoreWordLeft
+                | Opcode::StoreWordRight => None,
+                _ => Some(Operand::Immediate((self.immediate() as i16) as u32)),
+            },
+            InstructionType::JType => None,
+            _ => None,
         }
     }
 }
@@ -409,26 +588,26 @@ fn main() {
             continue; // Skip invalid instructions
         }
 
-        println!("{opcode:08X} = {}", instr.opcode);
+        println!("{opcode:08X} = {}", instr);
     }
 
-    println!("\n\n");
+    // println!("\n\n");
 
-    let bios_buffer = include_bytes!("../SCPH1000.BIN");
-    for (i, chunk) in bios_buffer.chunks(4).enumerate() {
-        if chunk.len() < 4 {
-            continue;
-        }
+    // let bios_buffer = include_bytes!("../SCPH1000.BIN");
+    // for (i, chunk) in bios_buffer.chunks(4).enumerate() {
+    //     if chunk.len() < 4 {
+    //         continue;
+    //     }
 
-        if i > 10 * 4 {
-            break;
-        }
+    //     if i > 10 * 4 {
+    //         break;
+    //     }
 
-        let opcode = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        let instr = Instruction::decode(opcode);
-        println!("{:08X}: {opcode:08X} > {}", i * 4, instr);
-        dbg!(&instr);
-    }
+    //     let opcode = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    //     let instr = Instruction::decode(opcode);
+    //     println!("{:08X}: {opcode:08X} > {}", i * 4, instr);
+    //     //dbg!(&instr);
+    // }
 }
 
 impl std::fmt::Debug for Instruction {
@@ -536,13 +715,24 @@ impl std::fmt::Display for Opcode {
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} {}, {}, {}",
-            self.opcode,
-            self.operand1(),
-            self.operand2(),
-            self.operand3()
-        )
+        let mut parts = vec![format!("{}", self.opcode)];
+
+        if let Some(op1) = self.operand1() {
+            parts.push(format!("{}", op1));
+        }
+
+        if let Some(op2) = self.operand2() {
+            parts.push(format!("{}", op2));
+        }
+
+        if let Some(op3) = self.operand3() {
+            parts.push(format!("{}", op3));
+        }
+
+        if parts.len() == 1 {
+            write!(f, "{}", parts[0])
+        } else {
+            write!(f, "{} {}", parts[0], parts[1..].join(", "))
+        }
     }
 }
