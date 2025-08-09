@@ -1,9 +1,17 @@
+type InstructionHandler = fn();
+
+fn noop<const UNSIGNED: bool, const IMMEDIATE: bool>() {
+    std::hint::black_box(UNSIGNED);
+    std::hint::black_box(IMMEDIATE);
+}
+
 macro_rules! instruction {
     ($name:ident, $opcode_type:ident) => {
         Instruction {
             opcode: Opcode::$name,
             opcode_raw: 0,
             opcode_type: InstructionType::$opcode_type,
+            handler: noop::<true, false>,
         }
     };
     ($name:ident($param:expr), $opcode_type:ident) => {
@@ -11,6 +19,7 @@ macro_rules! instruction {
             opcode: Opcode::$name($param),
             opcode_raw: 0,
             opcode_type: InstructionType::$opcode_type,
+            handler: noop::<true, false>,
         }
     };
 }
@@ -280,11 +289,20 @@ pub enum InstructionType {
     Invalid,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct Instruction {
     pub opcode: Opcode,
     pub opcode_raw: u32,
     pub opcode_type: InstructionType,
+    pub handler: InstructionHandler,
+}
+
+impl std::cmp::PartialEq for Instruction {
+    fn eq(&self, other: &Self) -> bool {
+        self.opcode == other.opcode
+            && self.opcode_raw == other.opcode_raw
+            && self.opcode_type == other.opcode_type
+    }
 }
 
 #[repr(transparent)]
